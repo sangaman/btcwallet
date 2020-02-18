@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/rpcclient"
@@ -139,10 +140,32 @@ func (c *BitcoindConn) Start() error {
 		return nil
 	}
 
+	var (
+		net wire.BitcoinNet
+		err error
+	)
+
 	// Verify that the node is running on the expected network.
-	net, err := c.getCurrentNet()
-	if err != nil {
-		return err
+	btcInWarmup := false
+	for {
+		net, err = c.getCurrentNet()
+		if err == nil {
+			// No error means bitcoind is responsive and we can proceed.
+			break
+		} else if rpcErr, ok := err.(*btcjson.RPCError); ok && rpcErr.Code == btcjson.ErrRPCInWarmup {
+			// Error code -28 indicates the bitcoind rpc is warming up.
+			// We will wait and recheck periodically until rpc is ready.
+			if btcInWarmup == false {
+				btcInWarmup = true
+				log.Info("Waiting for bitcoind RPC to finish warming up...")
+			}
+			time.Sleep(time.Second * 1)
+		} else {
+			return err
+		}
+	}
+	if btcInWarmup == true {
+		log.Info("Bitcoind finished warming up and RPC is ready")
 	}
 	if net != c.chainParams.Net {
 		return fmt.Errorf("expected network %v, got %v",
